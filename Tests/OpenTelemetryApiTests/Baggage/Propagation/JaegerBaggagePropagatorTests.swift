@@ -96,4 +96,56 @@ class JaegerBaggagePropagatorTests: XCTestCase {
     let result = jaegerPropagator.extract(carrier: carrier, getter: getter)
     XCTAssertEqual(result?.getEntries().sorted(), expectedBaggage.getEntries().sorted())
   }
+
+  // MARK: - Limits borrowed from W3C Baggage (https://www.w3.org/TR/baggage/#limits)
+
+  func testExtractKeepsAtMost64PrefixedEntries() {
+    var carrier = [String: String]()
+    for index in 0 ..< 65 {
+      carrier[JaegerBaggagePropagator.baggagePrefix + "k\(index)"] = "v"
+    }
+
+    let result = jaegerPropagator.extract(carrier: carrier, getter: getter)!
+    XCTAssertEqual(result.getEntries().count, 64)
+  }
+
+  func testExtractAcceptsExactly64PrefixedEntries() {
+    var carrier = [String: String]()
+    for index in 0 ..< 64 {
+      carrier[JaegerBaggagePropagator.baggagePrefix + "k\(index)"] = "v"
+    }
+
+    let result = jaegerPropagator.extract(carrier: carrier, getter: getter)!
+    XCTAssertEqual(result.getEntries().count, 64)
+  }
+
+  func testExtractKeepsAtMost64HeaderEntries() {
+    var carrier = [String: String]()
+    carrier[JaegerBaggagePropagator.baggageHeader] = (0 ..< 65).map { "k\($0)=v" }.joined(separator: ",")
+
+    let result = jaegerPropagator.extract(carrier: carrier, getter: getter)!
+    XCTAssertEqual(result.getEntries().count, 64)
+  }
+
+  func testExtractPrefixedAndHeaderEntriesShareTheEntryLimit() {
+    var carrier = [String: String]()
+    for index in 0 ..< 40 {
+      carrier[JaegerBaggagePropagator.baggagePrefix + "p\(index)"] = "v"
+    }
+    carrier[JaegerBaggagePropagator.baggageHeader] = (0 ..< 40).map { "h\($0)=v" }.joined(separator: ",")
+
+    let result = jaegerPropagator.extract(carrier: carrier, getter: getter)!
+    XCTAssertEqual(result.getEntries().count, 64)
+  }
+
+  func testExtractStopsAt8192BytesOfKeysAndValues() {
+    // 32 entries of a 10-byte key and a 250-byte value are 8,320 bytes; 31 fit (8,060), the 32nd does not.
+    var carrier = [String: String]()
+    for index in 0 ..< 32 {
+      carrier[JaegerBaggagePropagator.baggagePrefix + String(format: "key%07d", index)] = String(repeating: "v", count: 250)
+    }
+
+    let result = jaegerPropagator.extract(carrier: carrier, getter: getter)!
+    XCTAssertEqual(result.getEntries().count, 31)
+  }
 }

@@ -8,6 +8,9 @@ import Foundation
 /**
  * Implementation of the Jaeger propagation protocol. See
  * https://www.jaegertracing.io/docs/client-libraries/#propagation-format
+ *
+ * The Jaeger format defines no limits on baggage, so the W3C Baggage limits are applied on
+ * extraction as a defence-in-depth measure: at most 64 entries and 8192 bytes of keys and values.
  */
 
 public class JaegerBaggagePropagator: TextMapBaggagePropagator {
@@ -26,6 +29,7 @@ public class JaegerBaggagePropagator: TextMapBaggagePropagator {
 
   public func extract(carrier: [String: String], getter: some Getter) -> Baggage? {
     let builder = OpenTelemetry.instance.baggageManager.baggageBuilder()
+    var limits = BaggageExtractLimits()
 
     carrier.forEach {
       if $0.key.hasPrefix(JaegerBaggagePropagator.baggagePrefix) {
@@ -34,7 +38,8 @@ public class JaegerBaggagePropagator: TextMapBaggagePropagator {
         }
 
         if let key = EntryKey(name: String($0.key.dropFirst(JaegerBaggagePropagator.baggagePrefix.count))),
-           let value = EntryValue(string: $0.value) {
+           let value = EntryValue(string: $0.value),
+           limits.accept(key: key, value: value) {
           builder.put(key: key, value: value, metadata: nil)
         }
       } else if $0.key == JaegerBaggagePropagator.baggageHeader {
@@ -44,7 +49,8 @@ public class JaegerBaggagePropagator: TextMapBaggagePropagator {
             return
           }
           if let key = EntryKey(name: String(keyValue[0])),
-             let value = EntryValue(string: String(keyValue[1])) {
+             let value = EntryValue(string: String(keyValue[1])),
+             limits.accept(key: key, value: value) {
             builder.put(key: key, value: value, metadata: nil)
           }
         }
