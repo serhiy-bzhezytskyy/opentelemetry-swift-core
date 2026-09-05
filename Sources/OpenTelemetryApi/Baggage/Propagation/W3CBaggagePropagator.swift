@@ -20,11 +20,33 @@ public struct W3CBaggagePropagator: TextMapBaggagePropagator {
 
   static let headerBaggage = "baggage"
 
+  /// Limits from https://www.w3.org/TR/baggage/#limits: a header of up to 64 list-members and
+  /// 8192 bytes is accepted in full; past that, list-members are dropped whole, never in part.
+  static let maxListMembers = 64
+  static let maxHeaderBytes = 8192
+
   private func isValidKeyValuePair(_ keyValue: String) -> (key: String, value: String)? {
     let parts = keyValue.split(separator: "=", maxSplits: 1)
     guard parts.count == 2 else { return nil }
 
     return (String(parts[0]), String(parts[1]))
+  }
+
+  /// Splits the header into list-members. Nothing past `maxHeaderBytes` can be accepted, so the
+  /// header is cut there and back to the last separator before it, which keeps every list-member
+  /// whole or drops it.
+  private static func listMembers(in header: String) -> [String] {
+    let bytes = header.utf8
+    guard bytes.count > maxHeaderBytes else {
+      return header.components(separatedBy: ",")
+    }
+
+    let window = bytes.prefix(maxHeaderBytes + 1)
+    guard let lastSeparator = window.lastIndex(of: UInt8(ascii: ",")) else {
+      return []
+    }
+
+    return String(decoding: window[..<lastSeparator], as: UTF8.self).components(separatedBy: ",")
   }
 
   public init() {}
@@ -65,8 +87,8 @@ public struct W3CBaggagePropagator: TextMapBaggagePropagator {
 
     let builder = OpenTelemetry.instance.baggageManager.baggageBuilder()
 
-    let listMembers = baggageHeader.components(separatedBy: ",")
-    for listMember in listMembers {
+    let listMembers = W3CBaggagePropagator.listMembers(in: baggageHeader)
+    for listMember in listMembers.prefix(W3CBaggagePropagator.maxListMembers) {
       let parts = listMember.split(separator: ";", maxSplits: 1)
       guard !parts.isEmpty else { continue }
 

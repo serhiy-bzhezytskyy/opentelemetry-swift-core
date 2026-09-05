@@ -219,4 +219,74 @@ class W3BaggagePropagatorTest: XCTestCase {
                      "Should accept valid input: \(validInput)")
     }
   }
+
+  // MARK: - Limits (https://www.w3.org/TR/baggage/#limits)
+
+  /// A list-member of 400 bytes; keys and values are capped at 255 by EntryKey/EntryValue, so the
+  /// length is carried by the properties.
+  private func longListMember(_ index: Int) -> String {
+    return String(format: "k%02d=v;", index) + String(repeating: "m", count: 394)
+  }
+
+  func testW3CLimitsKeepAtMost64ListMembers() {
+    let header = (0 ..< 65).map { "k\($0)=v" }.joined(separator: ",")
+
+    let result = propagator.extract(carrier: ["baggage": header], getter: getter)!
+
+    XCTAssertEqual(result.getEntries().count, 64)
+    XCTAssertNotNil(result.getEntryValue(key: EntryKey(name: "k63")!))
+    XCTAssertNil(result.getEntryValue(key: EntryKey(name: "k64")!))
+  }
+
+  func testW3CLimitsAcceptExactly64ListMembers() {
+    let header = (0 ..< 64).map { "k\($0)=v" }.joined(separator: ",")
+
+    let result = propagator.extract(carrier: ["baggage": header], getter: getter)!
+
+    XCTAssertEqual(result.getEntries().count, 64)
+  }
+
+  func testW3CLimitsCutAHeaderOver8192BytesAtTheLastSeparator() {
+    // 30 members of 400 bytes: 12,029 bytes in all; the last separator within the first 8,193
+    // bytes follows the 20th member.
+    let header = (0 ..< 30).map(longListMember).joined(separator: ",")
+    XCTAssertEqual(header.utf8.count, 30 * 400 + 29)
+
+    let result = propagator.extract(carrier: ["baggage": header], getter: getter)!
+
+    XCTAssertEqual(result.getEntries().count, 20)
+    XCTAssertNotNil(result.getEntryValue(key: EntryKey(name: "k19")!))
+    XCTAssertNil(result.getEntryValue(key: EntryKey(name: "k20")!))
+  }
+
+  func testW3CLimitsAcceptAHeaderOfExactly8192Bytes() {
+    var members = (0 ..< 20).map(longListMember) // 20 * 400 bytes + 19 separators = 8,019
+    members.append("k20=v;" + String(repeating: "m", count: 166)) // + 1 separator + 172 bytes
+    let header = members.joined(separator: ",")
+    XCTAssertEqual(header.utf8.count, 8192)
+
+    let result = propagator.extract(carrier: ["baggage": header], getter: getter)!
+
+    XCTAssertEqual(result.getEntries().count, 21)
+  }
+
+  func testW3CLimitsNeverKeepAPartialListMember() {
+    // The second member straddles the 8,192-byte boundary and is dropped whole.
+    let members = ["k0=v;" + String(repeating: "m", count: 8000),
+                   "k1=v;" + String(repeating: "m", count: 500)]
+
+    let result = propagator.extract(carrier: ["baggage": members.joined(separator: ",")], getter: getter)!
+
+    XCTAssertEqual(result.getEntries().count, 1)
+    XCTAssertNotNil(result.getEntryValue(key: EntryKey(name: "k0")!))
+    XCTAssertNil(result.getEntryValue(key: EntryKey(name: "k1")!))
+  }
+
+  func testW3CLimitsYieldNoEntriesWhenNoListMemberFitsIn8192Bytes() {
+    let header = "k=v;" + String(repeating: "m", count: 9000)
+
+    let result = propagator.extract(carrier: ["baggage": header], getter: getter)
+
+    XCTAssertEqual(result?.getEntries().count ?? 0, 0)
+  }
 }
